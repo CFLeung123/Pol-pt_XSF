@@ -137,14 +137,14 @@
 	if(even_or_odd(l).eq.1)then
 	  c0 = l/2-1	
 	  c1 = l/2+1
-	  if(deriv.eqv..False.)then		!If we don't want derivatives of the correlation functions
+	  if(deriv == 0)then		!If we don't want derivatives of the correlation functions
 	   c0 = c0 + 1				!this will fix the calculation to be done only at x0=l/2.
 	   c1 = c0	
 	  endif
 	else
 	  c0=(l-1)/2-1
 	  c1=(l+1)/2+1
-	  if(deriv.eqv.0)then			!If we don't want derivatives of the correlation functions
+	  if(deriv == 0)then			!If we don't want derivatives of the correlation functions
 	   c0 = c0 + 1				!this will fix the calculation to be done only at x0=(l-1)/2
 	   c1 = c1-1				!and at x0=(l+1)/2.
 	  endif
@@ -179,31 +179,14 @@
 	integer,intent(out) :: t0_a,t0_b,u0_a,u0_b
 	integer :: c,d,e
 
-	    c = (s0.eq.0)
-	    d = (s0.eq.l)
-	    e = (s0.eq.(l-1))
+	c = merge(1, 0, s0 == 0)
+    d = merge(1, 0, s0 == l)
+    e = merge(1, 0, s0 == (l-1))
 
-!	   if(s0.eq.1)then
-!	    c=-1
-!	   else
-!	    c=0
-!	   endif
-!	   if(s0.eq.(l-1))then
-!	    d=-1
-!	   else
-!	    d=0
-!	   endif
-
-!	    t0_a = s0 - 1 - c 
-!	    t0_b = s0 + 1 + d
-!	    u0_a = s0 - 1 
-!	    u0_b = s0 + 1 + d
-
-	    t0_a = s0 - 1 - c 
-	    t0_b = s0 + 1 + d
-	    u0_a = s0 - 1 - c
-	    u0_b = s0 + 1 + e + 2*d
-
+    t0_a = max(0, s0 - 1 - c)
+    t0_b = min(l, s0 + 1 + d)
+    u0_a = max(0, s0 - 1 - c)
+    u0_b = min(l-1, s0 + 1 + e + 2*d)
 
 	END SUBROUTINE loop_limits
 
