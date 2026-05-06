@@ -1,6 +1,5 @@
-Below is a README.md file that explains how to build and run the code with gfortran on a Linux-like system (e.g., WSL). You can place it in the root directory of the project.
 
-```markdown
+
 # pt_XSF
 
 Fortran 90/95 code for the perturbative computation of correlation functions
