@@ -2,7 +2,7 @@
 ######## If using openmp
 
 #Locate the openmp libraries
-source /opt/intel/bin/compilervars.sh intel64
+#source /opt/intel/bin/compilervars.sh intel64
 
 #Number of threads to use:
 export OMP_NUM_THREADS=1
