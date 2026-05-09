@@ -44,80 +44,14 @@ pt_XSF/
 
 ## Building
 
-### 1. Install prerequisites (Ubuntu / WSL)
+### Install prerequisites (Ubuntu / WSL)
 
 ```bash
 sudo apt update
 sudo apt install gfortran liblapack-dev libblas-dev
 ```
 
-### 2. Adapt the source for gfortran
-
-The code uses two non‑standard Fortran idioms that are accepted by Intel
-compilers but rejected by gfortran. Before compiling, apply the following
-changes to `source/parameters.f90`.
-
-**(a)** Replace logical‑integer equality (around line 140 and 147):
-
-```fortran
-! OLD
-if (deriv .eqv. .False.) then   ! line ~140
-if (deriv .eqv. 0) then         ! line ~147
-
-! NEW
-if (deriv == 0) then
-if (deriv == 0) then
-```
-
-**(b)** Replace logical‑to‑integer conversions (lines ~182‑184) to avoid
-warnings (optional but clean). For example:
-
-```fortran
-! OLD
-c = (s0.eq.0)
-d = (s0.eq.l)
-e = (s0.eq.(l-1))
-
-! NEW
-c = 0; d = 0; e = 0
-if (s0 == 0)   c = 1
-if (s0 == l)   d = 1
-if (s0 == l-1) e = 1
-```
-
-### 3. Modify the Makefile
-
-Open `source/Makefile` and set:
-
-```makefile
-f90comp = gfortran
-switch  = -O2 -fopenmp -ffree-line-length-0 -Wno-conversion
-libs    = -llapack -lblas
-```
-
-The flag `-ffree-line-length-0` is required because some statements are
-longer than 132 characters.
-
-### 4. Update the helper scripts
-
-Both `compile.sh` and `pt_runner.sh` contain a line that tries to load
-Intel compiler variables. **Remove or comment out** that line:
-
-```bash
-# source /opt/intel/bin/compilervars.sh intel64
-```
-
-(If you are using ifort, keep the line – but the rest of this README
-assumes gfortran.)
-
-If you intend to use more than one CPU core, also adjust the export in
-`pt_runner.sh`:
-
-```bash
-export OMP_NUM_THREADS=12      # example for a 14‑core machine
-```
-
-### 5. Compile
+### Compile
 
 From the project root directory:
 
