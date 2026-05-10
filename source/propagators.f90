@@ -1,987 +1,928 @@
 
 
-	MODULE Propagators
-	!
-	! Module containing functions to compute the fermion and gauge propagators.
-	! Contains:
-	!		- Fermion propagator for the XSF
-	!		- Gluon propagator Wilson action
-	!		- Gluon propagator Luscher Weisz action
-	!
-	!
-	USE GammaMatrices
-	USE Input
-	USE Parameters
 
+	MODULE Parameters
+	!
+	! This module contains:
+	!
+	! 		- Definitions of essential parameters for the rest of the calculation.
+	!		- Definition of several utility functions and subroutines
+	!		- Definition of traces of products of 4x4 matrices
+	!		- Definition of functions for naming correlation functions
+	!
 	implicit none
+	integer :: c0, c1	! Parameters such that x_0 in [c0,c1]
+	complex*16,parameter :: imag=(0.0d0,1.0d0)
+	real(kind=8),parameter :: pi=3.1415926535897932384626433832d0
+	real(kind=8),parameter :: dimrep = 3.0d0
+	real(kind=8),parameter :: C2_R = 4.0d0/3.0d0
+	integer, dimension(2,2) :: f1f2 !flavour keep_tracker
+	integer,dimension(:,:,:),allocatable :: multiplicity
+
 	CONTAINS
 
-
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!
-!		FERMION PROPAGATOR ROUTINES FOR THE SF
-!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-	SUBROUTINE Fermion_Propagator(l,nvec,S_Prop)
-!         Computes the fermion propagator for the u-type and d-type
-!	 quarks in the XSF in absence of 
-!         background field. The Dirac operator of u-type quarks is built
-!	 and inverted numerically. The d-type propagator is obtained using 
-!	 the property S^(d) = g5 (S^(u))^dag g5.
-!	
-!	 The numerical inversion is performed takin advantage of the fact that
-!	 the Dirac operator has a band struture. Only the 12-diagonal band is non
-!	 zero.
-!
-!        For BF=0 the Dirac operator is trivial in color space and all color
-!	 comonents of the propagator are equal.
-!
-!        -Input: -l: lattice size 
-!		-nvec: fermion momentum
-!	
-!	-Output: -S_prop_u: u-type fermion propagator (4,4,0:l,0:l) matrix 
-!		  (The propagator isdefined at the boundaries)
-!		 -S_prop_d: d-type fermion propagator (4,4,0:l,0:l) matrix 
-!		  (The propagator isdefined at the boundaries)
-
-
-	implicit none
-	
-	!! Input and output variables
-	
-	integer,intent(in) :: l			!Physical size
-	integer,dimension(3),intent(in) :: nvec	!Entering momentum
-	complex(Kind=8),dimension(4,4,0:l,0:l,2),intent(out) :: S_Prop !2 flavours
-
-
-	complex(Kind=8),dimension(4,4,0:l,0:l) :: S_Prop_d_temp
-	!!! Internal variables
-	!Counters
-	integer :: i,j,t,s,dir,i1,j1
-
-	!Dirac scalars in the Dirac operator
-	real(kind=8),dimension(3) :: p, phat, ptwit !dimension(dir=3)
-	complex(kind=8) :: piece1
-
-	!Matrices involved in the construction of the Dirac operator
-	complex(kind=8),dimension(4,4) :: Block1, Block2, hmat, Inv
-	complex(kind=8),dimension(4,4) :: Aterm, Bterm, Cterm, Dterm, Eterm
-
-	!The Dirac operator and Propagator
-	complex(kind=8),dimension(4*(l+1),4*(l+1)) :: Dop
-	complex(kind=8),dimension(4*(l+1),4*(l+1)) :: S_col_p,S_Prop_d_big
-
-
-	!Lapack variables
-	integer :: ok1,ok2,wlwork
-	integer,parameter :: KL=5, KU=5
-	complex*16,dimension(4*(l+1)) ::wwork
-	integer,dimension(4*(l+1)) :: pivot
-	complex(kind=8),dimension((2*KL+KU+1),4*(l+1)) :: S_array
-
-
-	 Dop(:,:) = dcmplx(0.0d0,0.0d0)
-	 S_col_p(:,:) = dcmplx(0.0d0,0.0d0)	
-
-	 p(1)=(2.0d0*pi*nvec(1)+theta)/(l*1.0d0)	!momenta, plus theta			
-	 p(2)=(2.0d0*pi*nvec(2)+theta)/(l*1.0d0)
-	 p(3)=(2.0d0*pi*nvec(3)+theta)/(l*1.0d0)
-
-	  do dir=1,3						!3 directions
-	   phat(dir)=2.0d0*sin(0.5d0*p(dir))
-	   ptwit(dir)=sin(p(dir))						
-          enddo
-
-	piece1=dcmplx(0.0d0,0.0d0)
-	Block1(:,:)=dcmplx(0.0d0,0.0d0)
-	Block2(:,:)=dcmplx(0.0d0,0.0d0)
-	hmat(:,:)=dcmplx(0.0d0,0.0d0)
-
-	!!Define the parts of the Dirac operator:
-	do dir=1,3
-	  piece1=piece1+phat(dir)**2
-	enddo
-	piece1=piece1*0.5d0
-	Block1=piece1*II
-	Block2=imag*(ptwit(1)*g1+ptwit(2)*g2+ptwit(3)*g3)
-
-	Aterm = (1+m0)*II + Block1 +Block2
-	Bterm = -Pminus
-	Cterm = -Pplus
-	Eterm = imag*g5_Pminus + (m0 + zf)*II + ds*(Block1 + Block2)
-	Dterm = imag*g5_Pplus + (m0 + zf)*II + ds*(Block1 + Block2)
-
-	!!!!!! Construction of the operator Dop
-
-	!!!!!Diagonal part
-
-	!Aterm
-	do t=1,l-1
-	do i1=1,4
-	do j1=1,4
-	
-	Dop(4*t+i1,4*t+j1) = Aterm(i1,j1)
-
-	enddo
-	enddo
-	enddo
-
-	!Eterm
-	do i1=1,4
-	do j1=1,4
-
-	Dop(i1,j1) = Eterm(i1,j1)
-
-	enddo
-	enddo
-
-	!Dterm
-	do i1=1,4
-	do j1=1,4
-
-	Dop(4*l+i1,4*l+j1) = Dterm(i1,j1)
-
-	enddo
-	enddo
-
-	!Bterm
-	do t=0,l-1
-	do i1=1,4
-	do j1=1,4
-	
-	Dop(4*t+i1,4*(t+1)+j1) = Bterm(i1,j1)
-	
-	enddo
-	enddo
-	enddo
-
-	!Cterm
-	do t=0,l-1
-	do i1=1,4
-	do j1=1,4
-	
-	Dop(4*(t+1)+i1,4*t+j1) = Cterm(i1,j1)
-	
-	enddo
-	enddo
-	enddo
-	
-	
-	!Dirac Operator built at this point.
-	!We perform the inversion
-
-	!Bring the matrix to a form for the lapack routine
-
-	do j=1,4*(l+1)
-	do i= max(1,j-KU),min(4*(l+1),j+KL)
-	   S_array(KU+KL+1+i-j,j) = Dop(i,j)
-	enddo
-	enddo
-
-	do t=1,4*(l+1)
-	S_col_p(t,t) = dcmplx(1.0d0,0.0d0)
-	enddo
-
-	! For a referenceof this functions see: www.physics.orst.edu/~rubin/nacphy/lapack/linear.html
-	call ZGBTRF(4*(l+1),4*(l+1),KL,KU,S_array,(2*KL+KU+1),pivot,ok1)		
-	call ZGBTRS('N',4*(l+1),KL,KU,4*(l+1),S_array,(2*KL+KU+1),pivot,S_col_p,4*(l+1),ok2)
-
-	! And we store the propagator in the S_Prop matrix. Since the tree level propagator
-	! is color diagonal, we only write it as a color vector.
-	do s=1,l+1
-	do t=1,l+1
-	 do i=1,4
-	 do j=1,4
-	   S_Prop(i,j,t-1,s-1,1)=S_col_p((t-1)*4+i,(s-1)*4+j)
-	 enddo
-	 enddo
-	enddo
-	enddo
-
-
-	!Calculation of the hermithean conjugate
-
-	do i=1,4*(l+1)
-	do j=1,4*(l+1)
-
-	S_Prop_d_big(j,i) = dcmplx(real(S_col_p(i,j)),-aimag(S_col_p(i,j)))
-
-	enddo
-	enddo
-
-	!Building the propagator for the down type quark
-
-	do s=1,l+1
-	do t=1,l+1
-	 do i=1,4
-	 do j=1,4
-	   S_Prop_d_temp(i,j,t-1,s-1)=S_Prop_d_big((t-1)*4+i,(s-1)*4+j)
-	 enddo
-	 enddo
-	enddo
-	enddo
-
-	do s=0,l
-	do t=0,l
-	  
-	  S_Prop(:,:,s,t,2) = g5Ag5_shuf(S_Prop_d_temp(:,:,s,t))
-
-	enddo
-	enddo
-
-
-!	enddo !End of the color loop
-
-	END SUBROUTINE Fermion_Propagator
-
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
-
-
-	SUBROUTINE Gluon_Propagator_pl(l,nvec,D_prop) !!!This routine seems fine for p=0.
+	SUBROUTINE flav_counter_init()
 	!
-	! Subroutine to compute the free gluon propagator
-	! In order to build the different coefficients we will use the
-	! functions sn, cn and lambda_n.
+	! Sets a value to index flavour pairs.
 	!
-	integer,intent(in) :: l
-	integer,dimension(3),intent(in) :: nvec
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(out) :: D_prop !Now this is the output
-	
-	real(kind=8),dimension(3) :: p,phat,pdot
-	real(kind=8) :: phat_sq
-	integer :: i,j,k,k2
-	real(kind=8),dimension(0:l-1,0:l-1) :: d,b,c,n,e
-	integer :: zero_mom
+	f1f2(1,1)=1	!uu
+	f1f2(1,2)=2	!ud
+	f1f2(2,1)=3	!du
+	f1f2(2,2)=4	!dd
 
-	!initialization
-	d(:,:)=0.0d0
-	b(:,:)=0.0d0
-	c(:,:)=0.0d0
-	e(:,:)=0.0d0
-	n(:,:)=0.0d0
-	D_prop(:,:,:,:)=dcmplx(0.0d0,0.0d0)
-
-	zero_mom = nvec(1) + nvec(2) + nvec(3)		!Variable to check if we are at zero momentum or not
-
-	!construction of momenta
-	do i=1,3
- 	  p(i)=(2.0d0*pi/l)*nvec(i)
-	  phat(i)=2.0d0*sin(p(i)/2.0d0)
-	enddo
-
-	phat_sq=phat(1)*phat(1)+phat(2)*phat(2)+phat(3)*phat(3)
-	
-	!construction of the coefficients b,c,d,n,e
-	do i=0,l-1		
-	do j=0,l-1		
+	END SUBROUTINE flav_counter_init
 
 
- 	 if(zero_mom.eq.0)then !If we are at zero momentum use one formula
-	 
-	   !d
-	   if(i.gt.j)then
-	     d(i,j) = j*(1.0d0 - i*1.0d0/l*1.0d0)
-	   else 	 	
-	     d(i,j) = i*(1.0d0 - j*1.0d0/l*1.0d0)
- 	   endif
-
-	   !n,e
-	   n(i,j)=1.0d0+min(i,j)		!Test what happens if i=j
-	   e(i,j)=1.0d0+min(i,j)
-
-	 else !If we are not at zero momentum, use another
-
-	   do k=1,l-1
-	     d(i,j) = d(i,j) + sn(k,i,l)*sn(k,j,l)/(phat_sq + lambda_n(k,l)**2)
-	     b(i,j) = b(i,j) + sn(k,i,l)*sn(k,j,l)/(phat_sq + lambda_n(k,l)**2)**2
-	     c(i,j) = c(i,j) + lambda_n(k,l)*sn(k,i,l)*cn(k,j,l)/(phat_sq + lambda_n(k,l)**2)**2
-	     e(i,j) = e(i,j) + lambda_n(k,l)**2*cn(k,i,l)*cn(k,j,l)/(phat_sq + lambda_n(k,l)**2)**2
-	   enddo
-
-	   do k=0,l-1
-   	     n(i,j) = n(i,j) + cn(k,i,l)*cn(k,j,l)/(phat_sq + lambda_n(k,l)**2)
-	   enddo
-
-	  d(i,j) = d(i,j)*2.0d0/(l*1.0d0)
-	  b(i,j) = b(i,j)*2.0d0/(l*1.0d0)
-	  c(i,j) = c(i,j)*2.0d0/(l*1.0d0)
-	  e(i,j) = e(i,j)*2.0d0/(l*1.0d0)
-	  n(i,j) = n(i,j)*2.0d0/(l*1.0d0)
-
-	 endif
-
-	enddo
-	enddo
 
 
-	! Construction of the propagator
+	SUBROUTINE momentum_degeneracy(l,mom_deg)
+	!
+	! Computes the degeneracy of a momentum vector.
+	!
+	integer,intent(in) :: l, mom_deg
+	integer :: i,j,k
+	integer :: nequals
+
+	allocate(multiplicity(0:l-1,0:l-1,0:l-1))
+
+	multiplicity(:,:,:) = 0
+	nequals=0
+
+
+	if(mom_deg.eq.1)then
+
 	do i=0,l-1
-	do j=0,l-1
-	! D00
-  	  D_prop(0,0,i,j) = n(i,j) + (1.0d0/lambda_gf - 1.0d0)*e(i,j)
+	do j=i,l-1
+	do k=j,l-1
+
+		nequals=0
+		if(i.eq.j)then
+	  	nequals=2
+		  if(j.eq.k)then
+		    nequals=3
+		  else
+		  endif
+		else
+		  if(i.eq.k)then
+		    nequals=2
+		  else
+		    if(j.eq.k)then
+		      nequals=2
+		    else
+		    endif
+		  endif
+		endif
+
+		if(nequals.eq.0)then
+		  multiplicity(i,j,k)=6
+		else
+		  if(nequals.eq.2)then
+		    multiplicity(i,j,k)=3
+		  else
+		    multiplicity(i,j,k)=1
+		  endif
+		endif
+
 	enddo
-	enddo	
-
-	
-
-	!Dk0
-	do i=1,l-1
-	do j=0,l-1
-	do k=1,3
-	    D_prop(k,0,i,j) = imag*phat(k)*(1.0d0/lambda_gf - 1.0d0)*c(i,j)
-	enddo
-
-	enddo
-	enddo
-
-
-	!D0k
-	do i=0,l-1
-	do j=1,l-1
-
-	do k=1,3
-	    D_prop(0,k,i,j) = -D_prop(k,0,j,i)
-	enddo
-
-	enddo
-	enddo
-
-
-	!Dkl
-	do i=1,l-1
-	do j=1,l-1
-
-	do k=1,3
-	do k2=1,3
-	    D_prop(k,k2,i,j) = delta(k,k2)*d(i,j) + phat(k)*phat(k2)*(1.0d0/lambda_gf - 1.0d0)*b(i,j) 
 	enddo
 	enddo
 
-	enddo
-	enddo	    
-
-	END SUBROUTINE Gluon_Propagator_pl
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	SUBROUTINE Gluon_Propagator(l,nvec,D_prop) 
-	!
-	! Subroutine to compute the free gluon propagator
-	! In order to build the different coefficients we will use the
-	! functions sn, cn and lambda_n.
-	!
-	integer,intent(in) :: l
-	integer,dimension(3),intent(in) :: nvec
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(out) :: D_prop !Now this is the output
-	
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1) :: Kglue 
-	complex(kind=8),dimension(4*l-3,4*l-3) :: K_big_prop
-	!Lapack variables
-	integer :: ok1,ok2,wlwork
-	complex*16,dimension(4*l-3) ::wwork
-	integer,dimension(4*l-3) :: pivot
-
-
-	Kglue(:,:,:,:)=dcmplx(0.0d0,0.0d0)
-	K_big_prop(:,:) = dcmplx(0.0d0,0.0d0)	
-
-	if(G_act.eq.1)then
-	  call Gluonic_Quadratic_Operator_Pl(l,nvec,Kglue)
 	else
-	  call Gluonic_Quadratic_Operator_LW(l,nvec,Kglue)
+
+		multiplicity(:,:,:)=1
+
 	endif
-	call D_to_Dmat(l,Kglue,K_big_prop)
-	call ZGETRF(4*l-3,4*l-3,K_big_prop,4*l-3,pivot,ok1)		
-	call ZGETRI(4*l-3,K_big_prop,4*l-3,pivot,wwork,4*l-3,ok2)
 
-	!Get the propagator
-	call Dmat_to_D(l,K_big_prop,D_prop)
-
-
-	END SUBROUTINE Gluon_Propagator
-
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	END SUBROUTINE momentum_degeneracy
 
 
 
-	SUBROUTINE Gluonic_Quadratic_Operator_Pl(l,nvec,Kglue)
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	SUBROUTINE adjoint_matrix(A,B)
 	!
-	!	Subroutine to compute analytically the gluonic quadratic operator
-	!	as found it eq.(2.7-2.11) of Peter Weisz's notes:
-	!	"Computation of the improvement coefficient c_A to 1-loop",
-	!	December 1995.
-	!
-	!	-Input: -l: lattice size
-	!		-nvec: Momenta
-	!
-	!	-Output: Kglue: gluon quadratic operator  dimension(0:3,0:3,0:l-1,0:l-1)	
+	! Subroutine to calculate the adjoint of a 4x4 matrix
 	!
 	implicit none
 
-
-	integer,intent(in) :: l
-	integer,dimension(3),intent(in) :: nvec
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(out) :: Kglue 
-
-	real(kind=8),dimension(3) :: p,phat,pdot
-	real(kind=8) :: phat_sq
-	integer :: i,j,k,k2,s,t
-	real(kind=8) :: piece1,piece2,piece3
-
-	!Initialization
-
-	Kglue(:,:,:,:)=dcmplx(0.0d0,0.0d0)
-
-	do i=1,3
-	p(i)=(2.0d0*pi/l)*nvec(i)
-	phat(i)=2.0d0*sin(p(i)/2.0d0)
-	pdot(i)=sin(p(i))
-	enddo
-
-	phat_sq=phat(1)*phat(1)+phat(2)*phat(2)+phat(3)*phat(3)	
-
-
-	! HERE WE CALCULATE THE QUADRATIC GLUON OPERATOR WITH 0 BACKGROUND FIELD
-
-	!Kglue 00
-
-	do i=0,l-1
-	do j=0,l-1
-	  piece1 = lambda_gf*(2.0d0*delta(i,j) - delta(i+1,j) - delta(i-1,j))
-	  piece2 = delta(i,0)*(1 - delta(nvec(1),0)*delta(nvec(2),0)*delta(nvec(3),0)) + delta(i,l-1)
-	  piece3 = lambda_gf*delta(i,j)*piece2
-	  Kglue(0,0,i,j) = delta(i,j)*phat_sq + piece1 - piece3
-	enddo
-	enddo
-
-	! Kglue(k,0)
-
-	do k=1,3
-	do i=1,l-1
-	do j=0,l-1
-   	  Kglue(k,0,i,j) = imag*phat(k)*(1.0d0-lambda_gf)*(delta(i,j)-delta(i-1,j))
-	enddo
-	enddo
-	enddo
-
-	! Kglue(0,k)
-
-	do k=1,3
-	do i=0,l-1
-	do j=1,l-1
-	  Kglue(0,k,i,j) = -Kglue(k,0,j,i)
-	enddo
-	enddo
-	enddo
-
-	
-	! Kglue(k,k2)
-	
-	do k=1,3
-	do k2=1,3
-	  piece1 = delta(k,k2)*phat_sq - phat(k)*phat(k2)*(1.0d0 - lambda_gf)
-	  do i=1,l-1
-	  do j=1,l-1
-	    piece2 = 2*delta(i,j) - delta(i+1,j) - delta(i-1,j)
-	    Kglue(k,k2,i,j) = delta(i,j)*piece1+delta(k,k2)*piece2
-	  enddo
-	  enddo
-	enddo
-	enddo
-
-
-	END SUBROUTINE Gluonic_Quadratic_Operator_Pl
-
-
-
-
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	SUBROUTINE Gluonic_Quadratic_Operator_LW(l,nvec,Kglue)
-	!
-	!	Subroutine to compute the gluon propagator for the improved theory
-	!	described in arXiv:hep-lat/9808007.
-	!
-	implicit none
-
-
-	integer,intent(in) :: l
-	integer,dimension(3),intent(in) :: nvec
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(out) :: Kglue    
-
-	real(kind=8),dimension(3) :: p,phat,pdot
-	real(kind=8) :: phat_sq, phat_fth
-	integer :: i,j,k,k2,s,t
-	real(kind=8) :: piece1,piece2,piece3,piece4, piece5
-	real(kind=8),parameter :: c0_S = 5.0d0/3.0d0
-	real(kind=8),parameter :: c1_S = -1.0d0/12.0d0
-	real(kind=8),parameter :: c3_S = 0.0d0
-	real(kind=8),parameter :: d_bc_S = 1.0d0
-
-	!Initialization
-
-	Kglue(:,:,:,:)=dcmplx(0.0d0,0.0d0)
-
-
-	do i=1,3
-	p(i)=(2.0d0*pi/l)*nvec(i)
-	phat(i)=2.0d0*sin(p(i)/2.0d0)
-	pdot(i)=sin(p(i))
-	enddo
-
-	phat_sq = phat(1)*phat(1)+phat(2)*phat(2)+phat(3)*phat(3)	
-	phat_fth = phat(1)**4 + phat(2)**4 + phat(3)**4
-
-
-	! HERE WE CALCULATE THE QUADRATIC GLUON OPERATOR WITH 0 BACKGROUND FIELD
-
-	!Kglue 00
-
-	do i=0,l-1
-	do j=0,l-1
-
-	  piece1 = (c0_S + 6.0d0*c1_S + 8.0d0*c3_S)*phat_sq -c1_S*phat_fth +c3_S*(phat_fth - phat_sq**2)
-	  piece2 = lambda_gf*(2.0d0 -delta(i,0)*(1.0d0-delta(nvec(1),0)*delta(nvec(2),0)*delta(nvec(3),0)) - delta(i,l-1))
-	  piece3 = (delta(i-1,j)+delta(i+1,j))*(c1_S*phat_sq - lambda_gf)
-	  piece4 = c1_S*delta(i,j)*(delta(i,l-1) + delta(i,0))*(phat_sq - phat_fth*d_bc_S)
-
-	  Kglue(0,0,i,j) = delta(i,j)*(piece1 + piece2) + piece3 + piece4
-	enddo
-	enddo
-
-	! Kglue(k,0)
-
-	do k=1,3
-	do i=1,l-1
-	do j=0,l-1
-
-	  piece1 = (delta(i,j) - delta(i-1,j))*(c0_S + 5.0d0*c1_S + 8.0d0*c3_S -lambda_gf - c1_S*phat(k)**2 +c3_S*(phat(k)**2 - phat_sq))
-	  piece2 = c1_S*(delta(i+1,j)-delta(i-2,j)) + c1_S*(delta(i,j)*delta(i,l-1) - delta(i-1,j)*delta(i,1))*(1.0d0 - d_bc_S*phat(k)**2)
-
-   	  Kglue(k,0,i,j) = imag*phat(k)*(piece1 + piece2)
-	enddo
-	enddo
-	enddo
-
-
-	! Kglue(0,k)
-
-	do k=1,3
-	do i=0,l-1
-	do j=1,l-1
-	  Kglue(0,k,i,j) = -Kglue(k,0,j,i)
-	enddo
-	enddo
-	enddo
-
-	
-
-
-	do k=1,3
-	do k2=1,3
-
-	piece1 =(c0_S + 8.0d0*c1_S + 4.0d0*c3_S)*phat_sq + 2.0d0*c0_S + 10.0*c1_S + 16.0*c3_S
-	piece1 = piece1 - c1_S*(2.0d0*phat(k)**2 + phat_fth + phat_sq*(phat(k)**2))
-	piece1 = piece1 + c3_S*(2.0d0*phat(k)**2 + phat_fth -phat_sq**2 + phat_sq*(phat(k)**2))
-	piece1 = delta(k,k2)*piece1
-
-	piece2 = lambda_gf - c0_S - 8.0d0*c1_S - 6.0d0*c3_S + c1_S*(phat(k)**2+phat(k2)**2)
-	piece2 = phat(k)*phat(k2)*(piece2 + c3_S*(phat_sq-phat(k)**2-phat(k2)**2))
-
-	piece3 = delta(k,k2)*(c0_S + 4.0d0*c1_S + 8.0d0*c3_S - c1_S*phat(k)**2 + c3_S*(phat(k)**2-2.0d0*phat_sq))
-	piece3 = piece3 + c3_S*phat(k)*phat(k2)
-
-	piece4 = c1_S*delta(k,k2)
-
-	piece5 = c1_S*delta(k,k2)*(1.0d0-phat(k)**2*d_bc_S)
-	! Kglue(k,k2)
-	
-	do i=1,l-1
-	do j=1,l-1
-
-	  Kglue(k,k2,i,j) = delta(i,j)*(piece1+piece2)
-	  Kglue(k,k2,i,j) = Kglue(k,k2,i,j) - (delta(i+1,j) + delta(i-1,j))*piece3
-	  Kglue(k,k2,i,j) = Kglue(k,k2,i,j) - (delta(i+2,j) + delta(i-2,j))*piece4
-	  Kglue(k,k2,i,j) = Kglue(k,k2,i,j) + delta(i,j)*(delta(i,l-1) + delta(i,1))*piece5
-
-	enddo
-	enddo
-
-	enddo
-	enddo
-
-	END SUBROUTINE Gluonic_Quadratic_Operator_LW
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
-	SUBROUTINE Gluon_propagator_LW(l,nvec,D_prop)
-	!
-	!	Subroutine to compute the gluon propagator for the improved theory
-	!	described in arXiv:hep-lat/9808007.
-	!
-	!	First, the quadatic gluon operator is computed using the analytic 
-	!	expressions in arXiv:hep-lat/9808007. 
-	!
-	!	This is inverted numericall to obtain the gluon propagator.
-	!
-	!	The parameters c0, c1, c2 and d_bc of the LW action are defined here
-	!
-	!	-Input: -l: lattice size
-	!		-nvec: Momenta
-	!
-	!	-Output: D_prop: gluon propagator  dimension(0:3,0:3,0:l-1,0:l-1)
-	!
-	implicit none
-
-
-	integer,intent(in) :: l
-	integer,dimension(3),intent(in) :: nvec
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(out) :: D_prop    
-
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1) :: Kglue !Now this is the output
-	complex(kind=8),dimension(4*l-3,4*l-3) :: K_big_prop
-	complex(kind=8),dimension(4*l-3,4*l-3) :: K_big_op
-		
-
-	real(kind=8),dimension(3) :: p,phat,pdot
-	real(kind=8) :: phat_sq, phat_fth
-	integer :: i,j,k,k2,s,t
-	real(kind=8) :: piece1,piece2,piece3,piece4, piece5
-	real(kind=8),parameter :: c0_S = 5.0d0/3.0d0
-	real(kind=8),parameter :: c1_S = -1.0d0/12.0d0
-	real(kind=8),parameter :: c3_S = 0.0d0
-	real(kind=8),parameter :: d_bc_S = 1.0d0
-
-
-	!Lapack variables
-	integer :: ok1,ok2,wlwork
-	complex*16,dimension(4*l-3) ::wwork
-	integer,dimension(4*l-3) :: pivot
-
-
-	!Initialization
-
-	Kglue(:,:,:,:)=dcmplx(0.0d0,0.0d0)
-
-
-	do i=1,3
-	p(i)=(2.0d0*pi/l)*nvec(i)
-	phat(i)=2.0d0*sin(p(i)/2.0d0)
-	pdot(i)=sin(p(i))
-	enddo
-
-	phat_sq = phat(1)*phat(1)+phat(2)*phat(2)+phat(3)*phat(3)	
-	phat_fth = phat(1)**4 + phat(2)**4 + phat(3)**4
-
-
-	! HERE WE CALCULATE THE QUADRATIC GLUON OPERATOR WITH 0 BACKGROUND FIELD
-
-	!Kglue 00
-
-	do i=0,l-1
-	do j=0,l-1
-
-	  piece1 = (c0_S + 6.0d0*c1_S + 8.0d0*c3_S)*phat_sq -c1_S*phat_fth +c3_S*(phat_fth - phat_sq**2)
-	  piece2 = lambda_gf*(2.0d0 -delta(i,0)*(1.0d0-delta(nvec(1),0)*delta(nvec(2),0)*delta(nvec(3),0)) - delta(i,l-1))
-	  piece3 = (delta(i-1,j)+delta(i+1,j))*(c1_S*phat_sq - lambda_gf)
-	  piece4 = c1_S*delta(i,j)*(delta(i,l-1) + delta(i,0))*(phat_sq - phat_fth*d_bc_S)
-
-	  Kglue(0,0,i,j) = delta(i,j)*(piece1 + piece2) + piece3 + piece4
-	enddo
-	enddo
-
-	! Kglue(k,0)
-
-	do k=1,3
-	do i=1,l-1
-	do j=0,l-1
-
-	  piece1 = (delta(i,j) - delta(i-1,j))*(c0_S + 5.0d0*c1_S + 8.0d0*c3_S -lambda_gf - c1_S*phat(k)**2 +c3_S*(phat(k)**2 - phat_sq))
-	  piece2 = c1_S*(delta(i+1,j)-delta(i-2,j)) + c1_S*(delta(i,j)*delta(i,l-1) - delta(i-1,j)*delta(i,1))*(1.0d0 - d_bc_S*phat(k)**2)
-
-   	  Kglue(k,0,i,j) = imag*phat(k)*(piece1 + piece2)
-	enddo
-	enddo
-	enddo
-
-	! Kglue(0,k)
-
-	do k=1,3
-	do i=0,l-1
-	do j=1,l-1
-	  Kglue(0,k,i,j) = -Kglue(k,0,j,i)
-	enddo
-	enddo
-	enddo
-
-	
-	! Kglue(k,k2)
-	
-	do k=1,3
-	do k2=1,3
-
-	  piece1 = (c0_S + 8.0d0*c1_S + 4.0d0*c3_S)*phat_sq + 2.0d0*c0_S + 10.0d0*c1_S + 16.0d0*c3_S
-	  piece1 = piece1 - c1_S*(2.0d0*phat(k)**2 + phat_fth + phat_sq*phat(k)**2)
-	  piece1 = piece1 + c3_S*(2.0d0*phat(k)**2 + phat_fth - phat_sq**2 +phat_sq*phat(k)**2)
-	  piece1 = delta(k,k2)*piece1
-
-	  piece2 = lambda_gf - c0_S -8.0d0*c1_S -6.0d0*c3_S +c1_S*(phat(k)**2+phat(k2)**2) + c3_S*(phat_sq - phat(k)**2 - phat(k2)**2)
-	  piece2 = phat(k)*phat(k2)*piece2
-
-	  piece3 = delta(k,k2)*(c0_S + 4.0d0*c1_S + 8.0d0*c3_S -c1_S*phat(k)**2 + c3_S*(phat(k)**2 - 2.0d0*phat_sq))
-	  piece3 = piece3 + c3_S*phat(k)*phat(k2)
-
-	  piece4 = delta(k,k2)*c1_S
-
-	  piece5 = c1_S*delta(k,k2)*(1.0d0 - phat(k)**2*d_bc_S) 
-
-
-	  do i=1,l-1
-	  do j=1,l-1
-
-    	     Kglue(k,k2,i,j) = delta(i,j)*(piece1 + piece2) - (delta(i+1,j) + delta(i-1,j))*piece3
-    	     Kglue(k,k2,i,j) = Kglue(k,k2,i,j) - (delta(i+2,j) + delta(i-2,j))*piece4	     
-    	     Kglue(k,k2,i,j) = Kglue(k,k2,i,j) + (delta(i,l-1) + delta(i,1))*piece5
-	  enddo
-	  enddo
-	enddo
-	enddo
-
-
-	!Build the operator for inverting:
-	K_big_prop(:,:) = dcmplx(0.0d0,0.0d0)	
-
-	call D_to_Dmat(l,Kglue,K_big_op)
-
-	K_big_prop = K_big_op
-	!Invert the gluonic operator	
-
-	call ZGETRF(4*l-3,4*l-3,K_big_prop,4*l-3,pivot,ok1)		
-	call ZGETRI(4*l-3,K_big_prop,4*l-3,pivot,wwork,4*l-3,ok2)
-
-	!Get the propagator
-	call Dmat_to_D(l,K_big_prop,D_prop)
-
-
-
-	END SUBROUTINE Gluon_propagator_LW
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
-
-
-	SUBROUTINE print_gluon_propagator(l,D_prop)
-	!
-	! Prints on screen all the components of the gluon propagator. 
-	!
-	integer,intent(in) :: l
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(in) :: D_prop
-
-	integer :: mu, nu, t0, s0
-
-	do t0 = 0,l-1
-	do s0 = 0,l-1
-
-	print*, "t0, s0 =",t0,s0
-
-	do mu = 0,3
-        do nu = 0,3
-
-	  print*, mu, nu, real(D_prop(mu,nu,t0,s0)), aimag(D_prop(mu,nu,t0,s0))
-	
-	enddo
-	enddo
-
-	enddo
-	enddo
-	
-
-
-	END SUBROUTINE print_gluon_propagator
-
-
-
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-	SUBROUTINE D_to_Dmat(l,D_prop,D_mat)
-	!
-	! Subroutine that converts a matrix (0:3,0:3,0:l-1,0:l-1)  
-	! into a big matrix of dimension (0:3)x(0:l-1),(0:3)x(0:l-1).
-	! This is used tipically in the construction of the gluon propagator.
-	!
-	implicit none
-
-	integer,intent(in) :: l
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(in) :: D_prop
-	complex(kind=8),dimension(4*l-3,4*l-3),intent(out) :: D_mat
-
-	integer :: mu, nu, t0, s0
-
-
-	!Build the operator for inverting:
-	D_mat(:,:) = dcmplx(0.0d0,0.0d0)	
-
-	do t0=1,l-1
-	do s0=1,l-1
-	  do mu=0,3
-	  do nu=0,3
-	   D_mat(4*t0+(mu+1)-3,4*s0+(nu+1)-3) = D_prop(mu,nu,t0,s0)
-	  enddo
-	  enddo
-	enddo
-	enddo
-
-
-	do t0=1,l-1
-	  do mu=0,3
-	   D_mat(4*t0+(mu+1)-3,1) = D_prop(mu,0,t0,0)
-	  enddo
-	enddo
-
-	do s0=1,l-1
-	  do nu=0,3
-	   D_mat(1,4*s0+(nu+1)-3) = D_prop(0,nu,0,s0)
-	  enddo
-	enddo
-
-	D_mat(1,1) = D_prop(0,0,0,0)
-
-
-
-	END SUBROUTINE D_to_Dmat
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	SUBROUTINE Dmat_to_D(l,D_mat,D_prop)
-	!
-	! Subroutine that converts a matrix (0:3)x(0:l-1),(0:3)x(0:l-1) 
-	! into a matrix of dimension (0:3,0:3,0:l-1,0:l-1).
-	! This is used tipically in the construction of the gluon propagator.
-	!
-	implicit none
-
-	integer,intent(in) :: l
-	complex(kind=8),dimension(4*l-3,4*l-3),intent(in) :: D_mat
-	complex(kind=8),dimension(0:3,0:3,0:l-1,0:l-1),intent(out) :: D_prop
-
-	integer :: mu, nu, t0, s0
-
-
-	!Build the operator for inverting:
-	D_prop(:,:,:,:) = dcmplx(0.0d0,0.0d0)	
-
-
-
-
-
-	do t0=1,l-1
-	do s0=1,l-1
-	  do mu=0,3
-	  do nu=0,3
-	    D_prop(mu,nu,t0,s0) = D_mat(4*t0+(mu+1)-3,4*s0+(nu+1)-3)
-	  enddo
-	  enddo
-	enddo
-	enddo
-
-
-	do t0=1,l-1
-	  do mu=0,3
-	   D_prop(mu,0,t0,0) = D_mat(4*t0+(mu+1)-3,1)
-	  enddo
-	enddo
-
-	do s0=1,l-1
-	  do nu=0,3
-	    D_prop(0,nu,0,s0) = D_mat(1,4*s0+(nu+1)-3)
-	  enddo
-	enddo
-
- 	 D_prop(0,0,0,0) = D_mat(1,1)
-
-
-
-
-	END SUBROUTINE Dmat_to_D
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	SUBROUTINE check_inverse_matrix(l,mat1,mat2)
-	!
-	! Subroutine to check that A*A^-1 = I
-	!
-	implicit none
-
-	integer,intent(in) :: l
-	complex(kind=8),dimension(4*l-3,4*l-3),intent(in) :: mat1,mat2
-
-
+	complex(kind=8),dimension(4,4),intent(in) :: A
+	complex(kind=8),dimension(4,4),intent(out) :: B
 	integer :: i,j
-	complex(kind=8),dimension(4*l-3,4*l-3) :: mat3
 
-	mat3 = matmul(mat1,mat2)
+	do i=1,4
+	do j=1,4
 
-
-	do i=1,4*l-3
-	do j=1,4*l-3
-
-	  print*, i,j, real(mat3(i,j))
+	B(j,i) = dcmplx(real(A(i,j)),-aimag(A(i,j)))
 
 	enddo
 	enddo
 
+	END SUBROUTINE adjoint_matrix
 
-	END SUBROUTINE check_inverse_matrix
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+	SUBROUTINE TemporalExtent(l,deriv)
+	!
+	! Sets the limits of the temporal extent in which the different correlation
+	! functions are evaluated.
+	!
+	implicit none
+	integer :: l
+	integer :: deriv
+
+	if(even_or_odd(l).eq.1)then
+	  c0 = l/2-1
+	  c1 = l/2+1
+	  if(deriv .eq. 0)then		!If we don't want derivatives of the correlation functions
+	   c0 = c0 + 1				!this will fix the calculation to be done only at x0=l/2.
+	   c1 = c0
+	  endif
+	else
+	  c0=(l-1)/2-1
+	  c1=(l+1)/2+1
+	  if(deriv .eq. 0)then		!If we don't want derivatives of the correlation functions
+	   c0 = c0 + 1				!this will fix the calculation to be done only at x0=(l-1)/2
+	   c1 = c1-1				!and at x0=(l+1)/2.
+	  endif
+	endif
+
+
+	END SUBROUTINE TemporalExtent
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	SUBROUTINE loop_limits(l,s0,t0_a,t0_b,u0_a,u0_b)
+!	-This subroutine defines correctly, for the XSF
+!	 the temporal indeces inside temporal
+!	 sums when evaluating Sigma1, Sigma2, Gamma1 and the loop diagrams.
+!	-It takes avantage of the delta functions in the vertex functions.
+!	-NOTE that it is adapted to work only with the intel compiler,
+!	 since the boolean values are:
+!			true=-1,    false=0
+!	-For a given temporal index s0, it returns the range over which the other
+!	 indeces t0 and u0 should be integrated, which are always adjacent points.
+!	-If s0 is close to the boundaries (1 or l-1), then the limits of the ranges
+!	 are modified to avoid summing outside the SF.
+!
+!	-Input: -s0
+!
+!	-Output: -t0_a, t0_b: range for t0
+!		 -x0_a, x0_b: range for x0
+	implicit none
+
+	integer,intent(in) :: l,s0
+	integer,intent(out) :: t0_a,t0_b,u0_a,u0_b
+	integer :: c,d,e
+
+		c = merge(-1, 0, s0 .eq. 0)
+		d = merge(-1, 0, s0 .eq. l)
+		e = merge(-1, 0, s0 .eq. (l-1))
+
+!	   if(s0.eq.1)then
+!	    c=-1
+!	   else
+!	    c=0
+!	   endif
+!	   if(s0.eq.(l-1))then
+!	    d=-1
+!	   else
+!	    d=0
+!	   endif
+
+!	    t0_a = s0 - 1 - c
+!	    t0_b = s0 + 1 + d
+!	    u0_a = s0 - 1
+!	    u0_b = s0 + 1 + d
+
+	    t0_a = s0 - 1 - c
+	    t0_b = s0 + 1 + d
+	    u0_a = s0 - 1 - c
+	    u0_b = s0 + 1 + e + 2*d
+
+
+	END SUBROUTINE loop_limits
+
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-	!Functions for the gluon propagator
-
-	REAL(kind=8) FUNCTION sn(n,a,T)
+	INTEGER FUNCTION  n_limit(deg,n)
 	!
-	! Computes sn in the gluon propagator
+	! Function to define the lower limits of a momentum loop deppending on wether
+	! we are taking advantage of momentum degeneracy or not.
 	!
-	integer :: n,a,T	
-	
-	sn = sin(n*pi*a/(T*1.0d0))		!note that x0=a-1
+	integer :: deg, n
 
-	END FUNCTION sn
-
-
-
-
-	REAL(kind=8) FUNCTION cn(n,a,T)
-	!
-	! Computes cn in the gluon propagator
-	!
-	integer :: n,a,T
-
-	if(n.eq.0)then
-	  cn = 1.0d0 / sqrt(2.0d0)
+	if(deg.eq.1)then
+	  n_limit = n
 	else
-	  cn = cos(n*pi*(a*1.0d0 + 0.5d0)/(T*1.0d0))  !note that x0=a-1
+	  n_limit = 0
 	endif
 
-	END FUNCTION cn
+	END FUNCTION n_limit
 
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-
-
-	REAL(kind=8) FUNCTION lambda_n(n,T)
+	INTEGER FUNCTION m_period(n,l)
 	!
-	! Computes lambda_n in the gluon propagator
+	! Function that implements periodic boundary conditions.
 	!
-	integer :: n,T
+	integer :: n,l
 
-	lambda_n=2.0d0*sin(n*pi/(2.0d0*T))
+	if (n == 0) then
+	  m_period = 0
+	else
+	  m_period = l - n
+	endif
 
-	END FUNCTION lambda_n
+	END FUNCTION m_period
 
 
-	END MODULE Propagators
-	
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	REAL(kind=8) FUNCTION delta(a,b)
+	!
+	! Kronecker delta function
+	!
+	integer:: a,b
+
+	if(a.eq.b)then
+	  delta=1.0d0
+	else
+	  delta=0.0d0
+	endif
+
+	END FUNCTION delta
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	REAL(kind=8) FUNCTION omega(a,b)
+	!
+	! Heavyside function
+	!
+	integer :: a,b
+
+	if(a.gt.b)then
+	  omega=1.0d0
+	else
+	  omega=0.0d0
+	endif
+
+	END FUNCTION omega
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	INTEGER Function even_or_odd(l)
+	!
+	! Function to determine wether the number l is even or odd
+	!
+	integer :: l
+	real :: a
+
+	a = (-1.0)**l
+	if(a.gt.(0.0))then
+	  even_or_odd = 1	!l is even number
+	else
+	  even_or_odd = 0	!l is odd number
+	endif
+
+	END FUNCTION even_or_odd
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	COMPLEX(kind=8) FUNCTION Trace2(A,B)
+	!
+	! Function to calculate the trace of a product of 2 4x4 matrices:
+	!
+	complex(kind=8),dimension(4,4) :: A,B
+	integer :: i,j
+
+	Trace2 = dcmplx(0.0d0,0.0d0)
+
+	do i=1,4
+	do j=1,4
+
+	  Trace2 = Trace2 + A(j,i)*B(i,j)
+
+	enddo
+	enddo
+
+	END FUNCTION Trace2
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	COMPLEX(kind=8) FUNCTION Trace3(A,B,C)
+	!
+	! Function to calculate the trace of a product of 3 4x4 matrices:
+	!
+	complex(kind=8),dimension(4,4) :: A,B,C
+	complex(kind=8) :: Acum1
+	integer :: i,j,k
+
+	Trace3 = dcmplx(0.0d0,0.0d0)
+
+	do i=1,4
+	do k=1,4
+
+	  Acum1 = dcmplx(0.0d0,0.0d0)
+
+	  do j=1,4
+
+ 	    Acum1 = Acum1 + A(i,j)*B(j,k)
+
+	  enddo
+
+          Trace3 = Trace3 + Acum1*C(k,i)
+
+	enddo
+	enddo
+
+	END FUNCTION Trace3
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	COMPLEX(kind=8) FUNCTION Trace4(A,B,C,D)
+	!
+	! Function to calculate the trace of a product of 4 4x4 matrices:
+	!
+
+	complex(kind=8),dimension(4,4) :: A,B,C,D
+	complex(kind=8) :: Acum1, Acum2
+	integer :: i,j,k,l
+
+	Trace4 = dcmplx(0.0d0,0.0d0)
+
+	do i=1,4
+	do l=1,4
+
+	  Acum1 = dcmplx(0.0d0,0.0d0)
+
+  	  do k=1,4
+
+	    Acum2 = dcmplx(0.0d0,0.0d0)
+
+ 	    do j=1,4
+
+	      Acum2 = Acum2 + A(i,j)*B(j,k)
+
+	    enddo
+
+	    Acum1 = Acum1 + Acum2*C(k,l)
+
+	  enddo
+
+	  Trace4 = Trace4 + Acum1*D(l,i)
+
+	enddo
+	enddo
+
+	END FUNCTION Trace4
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	COMPLEX(kind=8) FUNCTION Trace5(A,B,C,D,E)
+	!
+	! Function to calculate the trace of a product of 5 4x4 matrices:
+	!
+
+	complex(kind=8),dimension(4,4) :: A,B,C,D,E
+	complex(kind=8) :: Acum1, Acum2, Acum3
+	integer :: i,j,k,l,m
+
+	Trace5 = dcmplx(0.0d0,0.0d0)
+
+	do i=1,4
+	do m=1,4
+
+	  Acum1 = dcmplx(0.0d0,0.0d0)
+
+  	  do l=1,4
+
+	    Acum2 = dcmplx(0.0d0,0.0d0)
+
+ 	    do k=1,4
+
+	      Acum3 = dcmplx(0.0d0,0.0d0)
+
+	        do j=1,4
+
+		  Acum3 = Acum3 + A(i,j)*B(j,k)
+
+		enddo
+
+		Acum2 = Acum2 + Acum3*C(k,l)
+
+	    enddo
+
+	    Acum1 = Acum1 + Acum2*D(l,m)
+
+	  enddo
+
+	  Trace5 = Trace5 + Acum1*E(m,i)
+
+	enddo
+	enddo
+
+	END FUNCTION Trace5
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	COMPLEX(kind=8) FUNCTION Trace6(A,B,C,D,E,F)
+	!
+	! Function to calculate the trace of a product of 6 4x4 matrices:
+	!
+	complex(kind=8),dimension(4,4) :: A,B,C,D,E,F
+	complex(kind=8) :: Acum1, Acum2, Acum3, Acum4
+	integer :: i,j,k,l,m,n
+
+
+	Trace6 = dcmplx(0.0d0,0.0d0)
+
+	do i=1,4
+	do n=1,4
+
+	  Acum1 = dcmplx(0.0d0,0.0d0)
+
+  	  do m=1,4
+
+	    Acum2 = dcmplx(0.0d0,0.0d0)
+
+ 	    do l=1,4
+
+	      Acum3 = dcmplx(0.0d0,0.0d0)
+
+	      do k=1,4
+
+		Acum4 = dcmplx(0.0d0,0.0d0)
+
+		do j=1,4
+
+		  Acum4 = Acum4 + A(i,j)*B(j,k)
+
+		enddo
+
+		Acum3 = Acum3 + Acum4*C(k,l)
+
+	      enddo
+
+	      Acum2 = Acum2 + Acum3*D(l,m)
+
+	    enddo
+
+	    Acum1 = Acum1 + Acum2*E(m,n)
+
+	  enddo
+
+	  Trace6 = Trace6 + Acum1*F(n,i)
+
+	enddo
+	enddo
+
+	END FUNCTION Trace6
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+	CHARACTER*2 FUNCTION  corrname_gXff(i)
+	!
+	! Returns a string with the name of the gXff correlation functions
+	!
+	integer :: i
+
+	if(i.eq.1)then
+	  corrname_gXff = 'gA'
+	else
+	endif
+
+	if(i.eq.2)then
+	  corrname_gXff = 'gP'
+	else
+	endif
+
+	if(i.eq.3)then
+	  corrname_gXff = 'gV'
+	else
+	endif
+
+	if(i.eq.4)then
+	  corrname_gXff = 'gS'
+	else
+	endif
+
+	END FUNCTION corrname_gXff
+
+
+
+
+	CHARACTER*3 FUNCTION  corrname_lYff(i)
+	!
+	! Returns a string with the name of the lYff correlation functions
+	!
+	integer :: i
+
+	if(i.eq.1)then
+	  corrname_lYff = 'lA_'
+	else
+	endif
+
+	if(i.eq.2)then
+	  corrname_lYff = 'lV_'
+	else
+	endif
+
+	if(i.eq.3)then
+	  corrname_lYff = 'lT_'
+	else
+	endif
+
+	if(i.eq.4)then
+	  corrname_lYff = 'lTt'
+	else
+	endif
+
+	END FUNCTION corrname_lYff
+
+
+
+	CHARACTER*2 FUNCTION  flavname(i)
+	!
+	! Returns a string with the flavour combinations uu, ud, du, dd.
+	!
+	integer :: i
+
+	if(i.eq.1)then
+	  flavname = 'uu'
+	else
+	endif
+
+	if(i.eq.2)then
+	  flavname = 'ud'
+	else
+	endif
+
+	if(i.eq.3)then
+	  flavname = 'du'
+	else
+	endif
+
+	if(i.eq.4)then
+	  flavname = 'dd'
+	else
+	endif
+
+	END FUNCTION flavname
+
+
+	character(len=4) function str2(k)
+	!
+	! Convert an integer to string.
+	!
+    	integer, intent(in) :: k
+    	write (str2, *) k
+    	str2 = adjustl(str2)
+	end function str2
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	CHARACTER*5 FUNCTION  corrname_Bilff(i)
+	!
+	! Returns a string with the name of the gXff correlation functions
+	!
+	integer :: i
+
+	if(i.eq.1)then
+	  corrname_Bilff = 'gA0'
+	else
+	endif
+
+	if(i.eq.2)then
+	  corrname_Bilff = 'gP'
+	else
+	endif
+
+	if(i.eq.3)then
+	  corrname_Bilff = 'gV0'
+	else
+	endif
+
+	if(i.eq.4)then
+	  corrname_Bilff = 'gS'
+	else
+	endif
+
+
+	if(i.eq.5)then
+	  corrname_Bilff = 'gA1'
+	else
+	endif
+
+	if(i.eq.6)then
+	  corrname_Bilff = 'gA2'
+	else
+	endif
+
+	if(i.eq.7)then
+	  corrname_Bilff = 'gA3'
+	else
+	endif
+
+	if(i.eq.8)then
+	  corrname_Bilff = 'gV1'
+	else
+	endif
+
+	if(i.eq.9)then
+	  corrname_Bilff = 'gV2'
+	else
+	endif
+
+	if(i.eq.10)then
+	  corrname_Bilff = 'gV3'
+	else
+	endif
+
+	if(i.eq.11)then
+	  corrname_Bilff = 'gT10'
+	else
+	endif
+
+	if(i.eq.12)then
+	  corrname_Bilff = 'gT20'
+	else
+	endif
+
+	if(i.eq.13)then
+	  corrname_Bilff = 'gT30'
+	else
+	endif
+
+	if(i.eq.14)then
+	  corrname_Bilff = 'gTt10'
+	else
+	endif
+
+	if(i.eq.15)then
+	  corrname_Bilff = 'gTt20'
+	else
+	endif
+
+	if(i.eq.16)then
+	  corrname_Bilff = 'gTt30'
+	else
+	endif
+
+	END FUNCTION corrname_Bilff
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	CHARACTER*6 FUNCTION  corrname_4f(i)
+	!
+	! Returns a string with the name of a correlation functions of a 4 fermion
+	! operator.
+	!
+	integer :: i
+
+	if(i.eq.1)then
+	  corrname_4f = 'II____'
+	else
+	endif
+
+	if(i.eq.2)then
+	  corrname_4f = 'g5____'
+	else
+	endif
+
+	if(i.eq.3)then
+	  corrname_4f = 'g0____'
+	else
+	endif
+
+	if(i.eq.4)then
+	  corrname_4f = 'g1____'
+	else
+	endif
+
+
+	if(i.eq.5)then
+	  corrname_4f = 'g2____'
+	else
+	endif
+
+	if(i.eq.6)then
+	  corrname_4f = 'g3____'
+	else
+	endif
+
+	if(i.eq.7)then
+	  corrname_4f = 'g0g5__'
+	else
+	endif
+
+	if(i.eq.8)then
+	  corrname_4f = 'g1g5__'
+	else
+	endif
+
+	if(i.eq.9)then
+	  corrname_4f = 'g2g5__'
+	else
+	endif
+
+	if(i.eq.10)then
+	  corrname_4f = 'g3g5__'
+	else
+	endif
+
+	if(i.eq.11)then
+	  corrname_4f = 'is00__'
+	else
+	endif
+
+	if(i.eq.12)then
+	  corrname_4f = 'is01__'
+	else
+	endif
+
+	if(i.eq.13)then
+	  corrname_4f = 'is02__'
+	else
+	endif
+
+	if(i.eq.14)then
+	  corrname_4f = 'is03__'
+	else
+	endif
+
+	if(i.eq.15)then
+	  corrname_4f = 'is10__'
+	else
+	endif
+
+	if(i.eq.16)then
+	  corrname_4f = 'is11__'
+	else
+	endif
+
+	if(i.eq.17)then
+	  corrname_4f = 'is12__'
+	else
+	endif
+
+	if(i.eq.18)then
+	  corrname_4f = 'is13__'
+	else
+	endif
+
+	if(i.eq.19)then
+	  corrname_4f = 'is20__'
+	else
+	endif
+
+	if(i.eq.20)then
+	  corrname_4f = 'is21__'
+	else
+	endif
+
+	if(i.eq.21)then
+	  corrname_4f = 'is22__'
+	else
+	endif
+
+	if(i.eq.22)then
+	  corrname_4f = 'is23__'
+	else
+	endif
+
+	if(i.eq.23)then
+	  corrname_4f = 'is30__'
+	else
+	endif
+
+	if(i.eq.24)then
+	  corrname_4f = 'is31__'
+	else
+	endif
+
+	if(i.eq.25)then
+	  corrname_4f = 'is32__'
+	else
+	endif
+
+	if(i.eq.26)then
+	  corrname_4f = 'is33__'
+	else
+	endif
+
+	if(i.eq.27)then
+	  corrname_4f = 'ig5s00'
+	else
+	endif
+
+	if(i.eq.28)then
+	  corrname_4f = 'ig5s01'
+	else
+	endif
+
+	if(i.eq.29)then
+	  corrname_4f = 'ig5s02'
+	else
+	endif
+
+	if(i.eq.30)then
+	  corrname_4f = 'ig5s03'
+	else
+	endif
+
+	if(i.eq.31)then
+	  corrname_4f = 'ig5s10'
+	else
+	endif
+
+	if(i.eq.32)then
+	  corrname_4f = 'ig5s11'
+	else
+	endif
+
+	if(i.eq.33)then
+	  corrname_4f = 'ig5s12'
+	else
+	endif
+
+	if(i.eq.34)then
+	  corrname_4f = 'ig5s13'
+	else
+	endif
+
+	if(i.eq.35)then
+	  corrname_4f = 'ig5s20'
+	else
+	endif
+
+	if(i.eq.36)then
+	  corrname_4f = 'ig5s21'
+	else
+	endif
+
+	if(i.eq.37)then
+	  corrname_4f = 'ig5s22'
+	else
+	endif
+
+	if(i.eq.38)then
+	  corrname_4f = 'ig5s23'
+	else
+	endif
+
+	if(i.eq.39)then
+	  corrname_4f = 'ig5s30'
+	else
+	endif
+
+	if(i.eq.40)then
+	  corrname_4f = 'ig5s31'
+	else
+	endif
+
+	if(i.eq.41)then
+	  corrname_4f = 'ig5s32'
+	else
+	endif
+
+	if(i.eq.42)then
+	  corrname_4f = 'ig5s33'
+	else
+	endif
+
+
+	END FUNCTION corrname_4f
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+	END MODULE Parameters
