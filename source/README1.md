@@ -74,19 +74,6 @@ effects.
 
 ---
 
-## Compiler flags required for gfortran
-
-These fixes make `parameters.f90` standard Fortran 90/95.  
-To compile the whole project, the Makefile should use:
-
-```makefile
-f90comp = gfortran
-switch  = -O2 -fopenmp -ffree-line-length-0
-libs    = -llapack -lblas
-```
-
-(`-ffree-line-length-0` is unrelated to this file but is needed for other source files containing long lines.)
-
 ---
 
 This document covers only the changes inside `parameters.f90`.  
