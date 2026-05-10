@@ -57,7 +57,7 @@ The fix explicitly sets `m_period = 0` when `n == 0`, making the behaviour deter
 ## Testing and validation
 
 The correctness of the ported code has been verified by comparing the full output of
-gfortran against the original Intel (ifort) results for a small lattice (\(L = 6\),
+gfortran against the original Intel (ifx) results for a small lattice (\(L = 6\),
 `mom_deg = 0`, `Gk2_4f` enabled, tree + one‑loop + counterterms).
 
 * **Tree‑level** (`_0`) results are **exactly identical** between the two compilers.
