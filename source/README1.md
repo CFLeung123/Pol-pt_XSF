@@ -70,9 +70,7 @@ gfortran against the original Intel (ifort) results for a small lattice (\(L = 6
   libraries.  These differences are harmless numerical noise.
 
 The observed deviations are therefore entirely attributable to normal floating‑point
-effects (reduction ordering, math library implementations) and **do not affect any
-physical results**.  The gfortran‑compiled program can be used for production
-calculations with full confidence.
+effects.
 
 ---
 
